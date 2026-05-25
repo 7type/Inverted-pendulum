@@ -1,0 +1,194 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="pendulum_swing">
+
+
+
+  <xacro:property name="M" value="0.135"/>
+  <xacro:property name="m" value="0.1"/>
+  <xacro:property name="l" value="0.2"/>
+  <xacro:property name="pole_length" value="0.4"/>
+  <xacro:property name="pole_radius" value="0.01"/>
+  <xacro:property name="cart_size_x" value="0.15"/>
+  <xacro:property name="cart_size_y" value="0.1"/>
+  <xacro:property name="cart_size_z" value="0.08"/>
+  <xacro:property name="cart_position_limit" value="5.0"/>
+  <xacro:property name="cart_max_velocity" value="10.0"/>
+  <xacro:property name="cart_effort_limit" value="50.0"/>
+
+  <!-- 惯性宏 -->
+  <xacro:macro name="box_inertia" params="m x y z">
+    <inertia ixx="${m*(y*y+z*z)/12}" ixy="0" ixz="0"
+             iyy="${m*(x*x+z*z)/12}" iyz="0"
+             izz="${m*(x*x+y*y)/12}"/>
+  </xacro:macro>
+
+  <xacro:macro name="cylinder_inertia" params="m r h">
+    <inertia ixx="${m*(3*r*r+h*h)/12}" ixy="0" ixz="0"
+             iyy="${m*(3*r*r+h*h)/12}" iyz="0"
+             izz="${m*r*r/2}"/>
+  </xacro:macro>
+
+  <!-- World Link -->
+  <link name="world"/>
+
+  <!-- Base Link -->
+  <link name="base_link"/>
+
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Rail Link - 导轨 -->
+  <link name="rail">
+    <visual>
+      <geometry>
+        <box size="10.0 0.05 0.05"/>
+      </geometry>
+      <material name="gray">
+        <color rgba="0.5 0.5 0.5 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="10.0 0.05 0.05"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="1.0"/>
+      <xacro:box_inertia m="1.0" x="10.0" y="0.05" z="0.05"/>
+    </inertial>
+  </link>
+
+  <joint name="base_to_rail" type="fixed">
+    <parent link="base_link"/>
+    <child link="rail"/>
+    <origin xyz="0 0 1.0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Cart Link - 简化小车 -->
+  <link name="cart">
+    <visual>
+      <geometry>
+        <box size="${cart_size_x} ${cart_size_y} ${cart_size_z}"/>
+      </geometry>
+      <material name="blue">
+        <color rgba="0.0 0.0 0.8 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${cart_size_x} ${cart_size_y} ${cart_size_z}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${M}"/>
+      <origin xyz="0 0 0"/>
+      <xacro:box_inertia m="${M}" x="${cart_size_x}" y="${cart_size_y}" z="${cart_size_z}"/>
+    </inertial>
+  </link>
+
+  <joint name="cart_joint" type="prismatic">
+    <parent link="rail"/>
+    <child link="cart"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="${-cart_position_limit}"
+           upper="${cart_position_limit}"
+           velocity="${cart_max_velocity}"
+           effort="${cart_effort_limit}"/>
+    <dynamics damping="0.2" friction="0.01"/>
+  </joint>
+
+  <!-- Pole Link - 摆杆 -->
+  <link name="pole">
+    <visual>
+      <origin xyz="0 0 -${pole_length/2.0}" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${pole_radius}" length="${pole_length}"/>
+      </geometry>
+      <material name="red">
+        <color rgba="0.8 0.0 0.0 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -${pole_length/2.0}" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="${pole_radius}" length="${pole_length}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 -${pole_length/2.0}" rpy="0 0 0"/>
+      <mass value="${m}"/>
+      <xacro:cylinder_inertia m="${m}" r="${pole_radius}" h="${pole_length}"/>
+    </inertial>
+  </link>
+
+  <!--
+    Pole Joint - 摆杆关节 (continuous 类型，无角度限位)
+
+    重要说明：
+      - continuous 关节无角度限制，Gazebo Sim 会自动累加角度
+      - pole link 的 visual/collision/inertial 的 origin z=-0.2，
+        表示几何中心在 joint 下方，因此 theta=0 时摆杆竖直向下
+
+    角度标准：
+      - theta = 0       → 摆杆竖直向下（自然下垂，势能最低）
+      - theta = pi/2    → 摆杆水平
+      - theta = pi      → 摆杆竖直向上（倒立平衡点）
+
+    状态向量（控制器中使用）：
+      [x, theta, x_dot, theta_dot]
+      x        = cart_joint position（小车水平位置）
+      theta    = pole_joint position（摆杆角度，0=向下，连续累加）
+      x_dot    = cart_joint velocity
+      theta_dot = pole_joint velocity
+  -->
+  <joint name="pole_joint" type="continuous">
+    <parent link="cart"/>
+    <child link="pole"/>
+    <origin xyz="0 0 ${cart_size_z/2.0}" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.00007892" friction="0.001"/>
+  </joint>
+
+  <!-- Gazebo 插件 (Gazebo Sim / Ignition) -->
+  <gazebo>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <robot_param>robot_description</robot_param>
+      <robot_param_node>robot_state_publisher</robot_param_node>
+      <parameters>$(find pendulum_swing)/config/pendulum_controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+
+  <!-- ros2_control 配置 -->
+  <ros2_control name="PendulumSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+    
+    <joint name="cart_joint">
+      <command_interface name="effort">
+        <param name="min">-${cart_effort_limit}</param>
+        <param name="max">${cart_effort_limit}</param>
+      </command_interface>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+    </joint>
+
+    <joint name="pole_joint">
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+    </joint>
+  </ros2_control>
+
+</robot>
