@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-倒立摆起摆 + LQR 稳定控制器
+倒立摆起摆+ LQR 稳定控制器
 
 能量起摆 → 三区域渐进制动 → LQR 稳定
 控制周期 200Hz，切换带滞环防抖动
@@ -29,14 +29,14 @@ class SwingUpController(Node):
             self.joint_callback,
             10
         )
-        # 200Hz 控制周期，太低了摆杆会抖，实时性也差
+        # 200Hz控制周期，太低了摆杆会抖，实时性也差
         self.timer = self.create_timer(0.005, self.control_loop)
 
         # 状态
         self.x = 0.0
         self.x_dot = 0.0
         self.theta_gazebo = 0.0   # 原始角度，保留多圈信息，算能量必须用这个
-        self.theta = 0.0          # 归一化到 [0, 2π]，区域判断用
+        self.theta = 0.0          # 归一化到[0, 2π]，区域判断用
         self.theta_dot = 0.0
         self.state_ready = False
 
@@ -66,16 +66,16 @@ class SwingUpController(Node):
         self.x_hard_limit = 3.0
 
         # LQR 切换参数
-        # 从 15°/3rad/s 放宽到 25°/5rad/s —— 之前条件太严，切换时角速度还很高，
+        # 从15°/3rad/s 放宽到25°/5rad/s —— 之前条件太严，切换时角速度还很高，
         # 摆杆直接"跨过去"停不住，放宽后才稳
-        # 滞环 25°进 / 45°出，防止在边界来回切
+        # 滞环25°进,45°出，防止在边界来回切
         self.switch_angle_in = np.deg2rad(25.0)
         self.switch_angle_out = np.deg2rad(45.0)
         self.switch_omega = 5.0
-        self.switch_hold = 10        # 连续 10 个周期（50ms）满足条件才切，防瞬时误判
+        self.switch_hold = 10        # 连续10个周期（50ms）满足条件才切，防瞬时误判
         self.switch_x_max = 4.0
 
-        # Q 矩阵可调：角度权重 2000 是保竖直的最小的权重
+        # Q 矩阵可调：角度权重2000是保竖直的最小的权重
         # 太高小车会抖，太低摆杆收敛慢
         #可等比调小，对K无影响
         self.Q = np.diag([100.0, 2000.0, 50.0, 100.0])
@@ -102,7 +102,7 @@ class SwingUpController(Node):
         M, m, l, I, g = self.M, self.m, self.l, self.I, self.g
         Mt = M + m
         b_cart = self.b
-        b_pole = 0.00007892   # Gazebo 里 pole_joint 的阻尼，仿真和现实的差距得补上
+        b_pole = 0.00007892   # Gazebo中pole_joint 的阻尼，模仿现实的情况
 
         denom = Mt * (m * l**2 + I) - (m * l)**2
 
@@ -117,7 +117,7 @@ class SwingUpController(Node):
             [0.0],
             [0.0],
             [(m * l**2 + I) / denom],
-            [-m * l / denom]   # 这个负号很关键，匹配 Gazebo 坐标系，否则力的方向正好相反
+            [-m * l / denom]   # 这个负号很关键，匹配Gazebo坐标系，否则力的方向正好相反
         ])
 
         P = self._solve_care_hamilton(A, B, self.Q, self.R)
@@ -126,7 +126,7 @@ class SwingUpController(Node):
 
     @staticmethod
     def _solve_care_hamilton(A, B, Q, R):
-      #  Hamilton 矩阵法解CARE，不依赖 scipy，纯 NumPy 实现
+      #  Hamilton 矩阵法解CARE，不依赖scipy，纯NumPy 实现
         n = A.shape[0]
         R_inv = np.linalg.inv(R)
         H = np.block([
@@ -173,8 +173,8 @@ class SwingUpController(Node):
         E = self.compute_energy()
         E_err = E - self.Er
 
-        # 相位检测：θ̇·cos(θ) 决定推力方向
-        # 最低点死区处理：角速度接近 0 时给默认方向，避免换向抖动
+        # 相位检测dotθ*cos(θ)决定推力方向
+        # 最低点死区处理：角速度接近0时给默认方向，避免换向抖动
         phase = self.theta_dot * np.cos(self.theta)
         if abs(phase) < 1e-6:
             at_bottom = (self.theta < 0.5) or (self.theta > 2 * np.pi - 0.5)
@@ -189,13 +189,14 @@ class SwingUpController(Node):
         theta_err = np.arctan2(np.sin(self.theta - np.pi), np.cos(self.theta - np.pi))
         angle_to_up = abs(theta_err)
 
-        # 三区域：下半区能量注入 / 过渡区渐进制动 / 捕获区 LQR 接管
-        # 单一起摆律搞不定，必须分区 —— 下半区要猛加能量，上半区要减速，捕获区要精细控制
+        # 三区域：下半区能量注入  过渡区渐进制动 
+        #  捕获区 LQR 接管
+        # 单一起摆律控制不精细，必须分区 —— 下半区要猛加能量，上半区要减速，捕获区要精细控制
         is_lower_half = angle_to_up > np.deg2rad(90.0)
         is_capture_zone = angle_to_up < np.deg2rad(25.0)
         is_transition = (not is_lower_half) and (not is_capture_zone)
 
-        # ========== 捕获区 ==========
+        #  捕获区
         if is_capture_zone:
             if (angle_to_up < self.switch_angle_in and
                 abs(self.theta_dot) < self.switch_omega and
@@ -218,7 +219,7 @@ class SwingUpController(Node):
                 debug_info = f'brake={brake_force:.1f}'
 
             else:
-                # 角速度可控，PD 纠正角度 + 阻尼 + 位置回中
+                # 角速度可控PD纠正角度 + 阻尼 + 位置回中
                 f_angle = -30.0 * theta_err
                 f_damp = -20.0 * self.theta_dot
                 f_pos = -10.0 * self.x
@@ -249,7 +250,7 @@ class SwingUpController(Node):
                 )
             return force
 
-        # ========== 过渡区 ==========
+        #  过渡区  
         if is_transition:
             if abs(self.x) > 1.5:
                 # 小车快跑偏了，优先回中，摆杆先不管
@@ -295,8 +296,8 @@ class SwingUpController(Node):
                 )
             return force
 
-        # ========== 下半区：能量注入 ==========
-        # 角速度失控保护：超过 15 rad/s 强制阻尼，位置保护让路
+        #下半区：能量注入 
+        # 角速度失控保护：超过15 rad/s 强制阻尼，位置保护让路
         if abs(self.theta_dot) > 15.0:
             force_energy = -np.sign(self.theta_dot) * min(self.u_max * 0.5, abs(self.theta_dot) * 1.2)
             pos_weight = 0.0
@@ -305,7 +306,7 @@ class SwingUpController(Node):
             if E_err < -0.03:
                 force_energy = +dir_sign * min(self.u_max * 0.5, abs(E_err) * self.k_energy)
             elif E_err > 0.03:
-                # 能量过冲用固定 6N 制动，不能跟 E_err 成正比
+                # 能量过冲用固定6N制动，不能跟E_err成正比
                 # 之前试过比例制动，误差越大制动力越大，反而把摆杆往回拉，能量泄漏
                 force_energy = -dir_sign * 6.0
             else:
@@ -313,7 +314,7 @@ class SwingUpController(Node):
             debug_info = f'energy={force_energy:+.1f}'
 
             # 位置保护权重随能量自适应
-            # 能量低时几乎不管位置（0.05），能量接近目标时逐渐收紧
+            # 能量低时几乎不管位置（0.05），能量高时逐渐收紧
             if E > self.Er * 1.5:
                 pos_weight = 0.0
             elif E < self.Er * 0.6:
